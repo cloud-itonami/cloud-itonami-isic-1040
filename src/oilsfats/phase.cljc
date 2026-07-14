@@ -61,10 +61,18 @@
   (when-let [p (phase-by-id phase-id)]
     (boolean (:escalate-all-proposals p))))
 
+(defn- index-of
+  "Portable (no JVM/JS host-interop) index lookup -- `.indexOf` is a
+  java.util.List method that ClojureScript vectors do not implement, so it
+  is not usable directly from `.cljc`. Returns -1 when not found, matching
+  `java.util.List#indexOf` semantics."
+  [coll x]
+  (or (first (keep-indexed (fn [i v] (when (= v x) i)) coll)) -1))
+
 (defn phase-gt
   "Is phase-a a later stage than phase-b in rollout order?"
   [phase-a phase-b]
   (let [order [:disabled :intake-only :intake-propose :production :optimization]
-        idx-a (.indexOf order phase-a)
-        idx-b (.indexOf order phase-b)]
+        idx-a (index-of order phase-a)
+        idx-b (index-of order phase-b)]
     (and (>= idx-a 0) (>= idx-b 0) (> idx-a idx-b))))

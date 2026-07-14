@@ -77,6 +77,14 @@
    :supplier-id "supplier-XY789"
    :supplier-location "Unknown"})
 
+(defn- fmt2
+  "Portable (no JVM-only `format`) 2-decimal string. `clojure.core/format`
+  has no ClojureScript equivalent; `.toFixed` is available on both hosts'
+  number types via reader-conditional host interop."
+  [x]
+  #?(:clj (format "%.2f" (double x))
+     :cljs (.toFixed x 2)))
+
 (defn print-verdict
   "Pretty-print governor verdict."
   [verdict]
@@ -86,7 +94,7 @@
   (when (seq (:violations verdict))
     (doseq [v (:violations verdict)]
       (println (str "  - " (:rule v) ": " (:detail v)))))
-  (println (str "Confidence: " (format "%.2f" (:confidence verdict)))))
+  (println (str "Confidence: " (fmt2 (:confidence verdict)))))
 
 (defn print-fact
   "Pretty-print audit fact."
