@@ -4,16 +4,14 @@
    [oilsfats.governor :as governor]
    [oilsfats.store :as store]))
 
-(deftest test-no-spec-basis-violation
-  "Proposal with no jurisdiction citation must be rejected."
+(deftest ^{:doc "Proposal with no jurisdiction citation must be rejected."} test-no-spec-basis-violation
   (let [proposal {:op :log-production-batch :cites [] :value {}}
         request {:op :log-production-batch}
         st (store/init-store)]
     (is (seq (governor/check request {} proposal st))
         "Should have violations")))
 
-(deftest test-confidence-floor
-  "Proposals below confidence floor must escalate."
+(deftest ^{:doc "Proposals below confidence floor must escalate."} test-confidence-floor
   (let [batch {:batch-id "b1" :ffa-percent 0.3 :peroxide-value-meq-kg 5.0
                :batch-temp-c 20 :holding-time-hours 24 :sanitation-score 90
                :metal-detector :pass :microbial-test :pass
@@ -25,8 +23,7 @@
         verdict (governor/check request {} proposal st)]
     (is (:escalate? verdict) "Low confidence should escalate")))
 
-(deftest test-high-stakes-ops-escalate
-  "High-stakes operations must always escalate."
+(deftest ^{:doc "High-stakes operations must always escalate."} test-high-stakes-ops-escalate
   (let [batch {:batch-id "b1" :ffa-percent 0.3 :peroxide-value-meq-kg 5.0
                :batch-temp-c 20 :holding-time-hours 24 :sanitation-score 90
                :metal-detector :pass :microbial-test :pass
@@ -40,8 +37,7 @@
     (is (:escalate? verdict)
         "High-stakes op should escalate even with high confidence")))
 
-(deftest test-ffa-exceeds-limit
-  "Batches with FFA above jurisdiction limit must be rejected."
+(deftest ^{:doc "Batches with FFA above jurisdiction limit must be rejected."} test-ffa-exceeds-limit
   (let [batch {:batch-id "b1" :ffa-percent 1.2 :peroxide-value-meq-kg 5.0
                :batch-temp-c 20 :holding-time-hours 24 :sanitation-score 90
                :product-id :soybean-oil :jurisdiction "US"
@@ -55,8 +51,7 @@
     (is (not (:ok? verdict)) "FFA violation should fail")
     (is (:hard? verdict) "FFA violation is hard")))
 
-(deftest test-peroxide-value-exceeds-limit
-  "Batches with PV above jurisdiction limit must be rejected."
+(deftest ^{:doc "Batches with PV above jurisdiction limit must be rejected."} test-peroxide-value-exceeds-limit
   (let [batch {:batch-id "b1" :ffa-percent 0.3 :peroxide-value-meq-kg 15.0
                :batch-temp-c 20 :holding-time-hours 24 :sanitation-score 90
                :product-id :soybean-oil :jurisdiction "US"
@@ -69,8 +64,7 @@
         verdict (governor/check request {} proposal st)]
     (is (not (:ok? verdict)) "PV violation should fail")))
 
-(deftest test-temp-out-of-range
-  "Batches outside storage temp range must be rejected."
+(deftest ^{:doc "Batches outside storage temp range must be rejected."} test-temp-out-of-range
   (let [batch {:batch-id "b1" :ffa-percent 0.3 :peroxide-value-meq-kg 5.0
                :batch-temp-c 30 ;; Soybean oil spec: 15-25°C
                :holding-time-hours 24 :sanitation-score 90
@@ -84,8 +78,7 @@
         verdict (governor/check request {} proposal st)]
     (is (not (:ok? verdict)) "Temp violation should fail")))
 
-(deftest test-holding-time-exceeded
-  "Batches exceeding max holding time must be rejected."
+(deftest ^{:doc "Batches exceeding max holding time must be rejected."} test-holding-time-exceeded
   (let [batch {:batch-id "b1" :ffa-percent 0.3 :peroxide-value-meq-kg 5.0
                :batch-temp-c 20
                :holding-time-hours 2500 ;; >100 days; US limit 90 days = 2160 hours
@@ -100,8 +93,7 @@
         verdict (governor/check request {} proposal st)]
     (is (not (:ok? verdict)) "Holding time violation should fail")))
 
-(deftest test-contamination-flag-unresolved
-  "Unresolved contamination flags must block batch."
+(deftest ^{:doc "Unresolved contamination flags must block batch."} test-contamination-flag-unresolved
   (let [batch {:batch-id "b1" :ffa-percent 0.3 :peroxide-value-meq-kg 5.0
                :batch-temp-c 20 :holding-time-hours 24 :sanitation-score 90
                :product-id :soybean-oil :jurisdiction "US"
@@ -116,8 +108,7 @@
     (is (not (:ok? verdict)) "Unresolved contamination should fail")
     (is (:hard? verdict) "Unresolved contamination is hard")))
 
-(deftest test-metal-detector-failure
-  "Metal detector failures must block batch."
+(deftest ^{:doc "Metal detector failures must block batch."} test-metal-detector-failure
   (let [batch {:batch-id "b1" :ffa-percent 0.3 :peroxide-value-meq-kg 5.0
                :batch-temp-c 20 :holding-time-hours 24 :sanitation-score 90
                :product-id :soybean-oil :jurisdiction "US"
@@ -131,8 +122,7 @@
         verdict (governor/check request {} proposal st)]
     (is (not (:ok? verdict)) "Metal detector failure should fail")))
 
-(deftest test-already-processed
-  "Already-processed batches must be rejected."
+(deftest ^{:doc "Already-processed batches must be rejected."} test-already-processed
   (let [batch {:batch-id "b1" :ffa-percent 0.3 :peroxide-value-meq-kg 5.0
                :batch-temp-c 20 :holding-time-hours 24 :sanitation-score 90
                :product-id :soybean-oil :jurisdiction "US"
@@ -146,8 +136,7 @@
         verdict (governor/check request {} proposal st)]
     (is (not (:ok? verdict)) "Already-processed batch should fail")))
 
-(deftest test-good-batch-passes
-  "Well-formed batch with all checks passing should be approved."
+(deftest ^{:doc "Well-formed batch with all checks passing should be approved."} test-good-batch-passes
   (let [batch {:batch-id "b1" :ffa-percent 0.3 :peroxide-value-meq-kg 5.0
                :batch-temp-c 20 :holding-time-hours 24 :sanitation-score 90
                :product-id :soybean-oil :jurisdiction "US"

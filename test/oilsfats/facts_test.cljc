@@ -3,30 +3,26 @@
    [clojure.test :refer [deftest is testing]]
    [oilsfats.facts :as facts]))
 
-(deftest test-product-type-by-id
-  "Retrieve product type specifications."
+(deftest ^{:doc "Retrieve product type specifications."} test-product-type-by-id
   (let [soy (facts/product-type-by-id :soybean-oil)]
     (is (= :soybean-oil (:id soy)))
     (is (= "Soybean Oil" (:name soy)))
     (is (= 15 (:storage-temp-min-c soy)))
     (is (= 25 (:storage-temp-max-c soy)))))
 
-(deftest test-jurisdiction-by-id
-  "Retrieve jurisdiction regulatory requirements."
+(deftest ^{:doc "Retrieve jurisdiction regulatory requirements."} test-jurisdiction-by-id
   (let [us (facts/jurisdiction-by-id :US)]
     (is (= :US (:id us)))
     (is (= "United States" (:name us)))
     (is (= 0.5 (:ffa-limit-percent us)))
     (is (= 10.0 (:peroxide-limit-meq-kg us)))))
 
-(deftest test-eu-stricter-than-us
-  "EU has stricter FFA limits than US."
+(deftest ^{:doc "EU has stricter FFA limits than US."} test-eu-stricter-than-us
   (let [us (facts/jurisdiction-by-id :US)
         eu (facts/jurisdiction-by-id :EU)]
     (is (< (:ffa-limit-percent eu) (:ffa-limit-percent us)))))
 
-(deftest test-required-evidence-satisfied
-  "Check if batch evidence meets jurisdiction requirements."
+(deftest ^{:doc "Check if batch evidence meets jurisdiction requirements."} test-required-evidence-satisfied
   (is (facts/required-evidence-satisfied?
        :US
        #{:ffa-assay :peroxide-test :microbial-test :sanitation-audit})
@@ -42,8 +38,7 @@
        #{:ffa-assay :peroxide-test :microbial-test :sanitation-audit :traceability-log})
       "EU requiring traceability-log"))
 
-(deftest test-ffa-exceeds-limit
-  "FFA (rancidity) checks."
+(deftest ^{:doc "FFA (rancidity) checks."} test-ffa-exceeds-limit
   (is (not (facts/ffa-exceeds-limit? 0.5 :US))
       "FFA 0.5% at US limit should pass")
   (is (facts/ffa-exceeds-limit? 0.6 :US)
@@ -51,8 +46,7 @@
   (is (facts/ffa-exceeds-limit? 0.4 :EU)
       "FFA 0.4% over EU limit (0.3%) should fail"))
 
-(deftest test-peroxide-value-exceeds-limit
-  "Peroxide value (oxidation) checks."
+(deftest ^{:doc "Peroxide value (oxidation) checks."} test-peroxide-value-exceeds-limit
   (is (not (facts/peroxide-value-exceeds-limit? 10.0 :US))
       "PV 10.0 at limit should pass")
   (is (facts/peroxide-value-exceeds-limit? 11.0 :US)
@@ -60,8 +54,7 @@
   (is (facts/peroxide-value-exceeds-limit? 6.0 :EU)
       "PV 6.0 over EU limit (5.0) should fail"))
 
-(deftest test-holding-time-exceeded
-  "Holding time checks (input in hours, jurisdiction limits in days)."
+(deftest ^{:doc "Holding time checks (input in hours, jurisdiction limits in days)."} test-holding-time-exceeded
   (is (not (facts/holding-time-exceeded? 2160 :US))
       "2160 hours (90 days) at US limit should pass")
   (is (facts/holding-time-exceeded? 2161 :US)
@@ -71,8 +64,7 @@
   (is (facts/holding-time-exceeded? 1441 :EU)
       "1441 hours over EU limit should fail"))
 
-(deftest test-sanitation-score-insufficient
-  "Sanitation score checks (0-100)."
+(deftest ^{:doc "Sanitation score checks (0-100)."} test-sanitation-score-insufficient
   (is (not (facts/sanitation-score-insufficient? 85 :US))
       "Score 85 at US minimum should pass")
   (is (facts/sanitation-score-insufficient? 84 :US)
@@ -82,8 +74,7 @@
   (is (facts/sanitation-score-insufficient? 89 :EU)
       "Score 89 below EU minimum should fail"))
 
-(deftest test-batch-temp-out-of-range
-  "Storage temperature range checks."
+(deftest ^{:doc "Storage temperature range checks."} test-batch-temp-out-of-range
   (is (not (facts/batch-temp-out-of-range? 20 15 25))
       "20°C within [15,25] should pass")
   (is (facts/batch-temp-out-of-range? 14 15 25)
@@ -91,8 +82,7 @@
   (is (facts/batch-temp-out-of-range? 26 15 25)
       "26°C above range should fail"))
 
-(deftest test-product-specs-differ
-  "Different products have different storage requirements."
+(deftest ^{:doc "Different products have different storage requirements."} test-product-specs-differ
   (let [soy (facts/product-type-by-id :soybean-oil)
         palm (facts/product-type-by-id :palm-oil)
         animal (facts/product-type-by-id :animal-fat)]
