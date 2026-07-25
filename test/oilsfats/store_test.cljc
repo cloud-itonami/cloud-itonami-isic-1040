@@ -3,31 +3,27 @@
    [clojure.test :refer [deftest is testing]]
    [oilsfats.store :as store]))
 
-(deftest test-init-store
-  "Initialize empty store."
+(deftest ^{:doc "Initialize empty store."} test-init-store
   (let [st (store/init-store)]
     (is (= {} (:batches st)))
     (is (= [] (:facts st)))
     (is (= {} (:shipments st)))
     (is (= {} (:maintenance st)))))
 
-(deftest test-create-batch
-  "Create a new batch in store."
+(deftest ^{:doc "Create a new batch in store."} test-create-batch
   (let [st (store/init-store)
         batch {:batch-id "b1" :product-id :soybean-oil :ffa-percent 0.3}
         st' (store/create-batch st "b1" batch)]
     (is (= batch (store/production-batch st' "b1")))))
 
-(deftest test-batch-exists
-  "Check if batch exists in store."
+(deftest ^{:doc "Check if batch exists in store."} test-batch-exists
   (let [st (store/init-store)
         batch {:batch-id "b1"}
         st' (store/create-batch st "b1" batch)]
     (is (store/batch-exists? st' "b1"))
     (is (not (store/batch-exists? st' "b2")))))
 
-(deftest test-batch-already-processed
-  "Check if batch has been processed."
+(deftest ^{:doc "Check if batch has been processed."} test-batch-already-processed
   (let [st (store/init-store)
         batch {:batch-id "b1" :processed? false}
         st' (store/create-batch st "b1" batch)]
@@ -36,8 +32,7 @@
     (let [st'' (store/mark-batch-processed st' "b1")]
       (is (store/batch-already-processed? st'' "b1")))))
 
-(deftest test-batch-shipment-finalized
-  "Check if batch shipment is finalized."
+(deftest ^{:doc "Check if batch shipment is finalized."} test-batch-shipment-finalized
   (let [st (store/init-store)
         batch {:batch-id "b1"}
         st' (store/create-batch st "b1" batch)]
@@ -46,16 +41,14 @@
     (let [st'' (store/mark-batch-shipment-finalized st' "b1")]
       (is (store/batch-shipment-finalized? st'' "b1")))))
 
-(deftest test-add-fact
-  "Append audit fact to ledger."
+(deftest ^{:doc "Append audit fact to ledger."} test-add-fact
   (let [st (store/init-store)
         fact {:t :test-fact :subject "b1"}
         st' (store/add-fact st fact)]
     (is (= 1 (count (:facts st'))))
     (is (= fact (first (:facts st'))))))
 
-(deftest test-facts-for-batch
-  "Retrieve facts related to specific batch."
+(deftest ^{:doc "Retrieve facts related to specific batch."} test-facts-for-batch
   (let [st (store/init-store)
         fact1 {:t :fact1 :subject "b1"}
         fact2 {:t :fact2 :subject "b1"}
@@ -68,8 +61,7 @@
     (is (= 2 (count b1-facts)))
     (is (every? #(= "b1" (:subject %)) b1-facts))))
 
-(deftest test-update-batch-field
-  "Update a single field on batch."
+(deftest ^{:doc "Update a single field on batch."} test-update-batch-field
   (let [st (store/init-store)
         batch {:batch-id "b1" :ffa-percent 0.3 :peroxide-value-meq-kg 5.0}
         st' (store/create-batch st "b1" batch)
@@ -78,8 +70,7 @@
     (is (= 0.5 (:ffa-percent updated)))
     (is (= 5.0 (:peroxide-value-meq-kg updated)))))
 
-(deftest test-update-batch
-  "Update multiple fields on batch."
+(deftest ^{:doc "Update multiple fields on batch."} test-update-batch
   (let [st (store/init-store)
         batch {:batch-id "b1" :ffa-percent 0.3 :peroxide-value-meq-kg 5.0}
         st' (store/create-batch st "b1" batch)
@@ -89,22 +80,19 @@
     (is (= 90 (:sanitation-score updated)))
     (is (= 5.0 (:peroxide-value-meq-kg updated)))))
 
-(deftest test-add-maintenance-record
-  "Record equipment maintenance."
+(deftest ^{:doc "Record equipment maintenance."} test-add-maintenance-record
   (let [st (store/init-store)
         maint {:equipment-id "pump-A" :type :filter-replacement :date "2026-07-14"}
         st' (store/add-maintenance-record st "maint-1" maint)]
     (is (= maint (store/maintenance-record st' "maint-1")))))
 
-(deftest test-add-shipment-record
-  "Record shipment coordination."
+(deftest ^{:doc "Record shipment coordination."} test-add-shipment-record
   (let [st (store/init-store)
         shipment {:batch-id "b1" :destination "EU warehouse" :mode "truck"}
         st' (store/add-shipment-record st "ship-1" shipment)]
     (is (= shipment (store/shipment-record st' "ship-1")))))
 
-(deftest test-create-batch-idempotent
-  "Creating the same batch twice should be idempotent."
+(deftest ^{:doc "Creating the same batch twice should be idempotent."} test-create-batch-idempotent
   (let [st (store/init-store)
         batch1 {:batch-id "b1" :ffa-percent 0.3}
         st' (store/create-batch st "b1" batch1)

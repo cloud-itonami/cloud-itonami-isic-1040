@@ -6,8 +6,7 @@
    [oilsfats.operation :as operation]
    [oilsfats.store :as store]))
 
-(deftest test-run-operation-good-batch-escalates-high-stakes
-  "Good batch with high-stakes op should escalate (not independent approve)."
+(deftest ^{:doc "Good batch with high-stakes op should escalate (not independent approve)."} test-run-operation-good-batch-escalates-high-stakes
   (let [batch {:batch-id "b1" :ffa-percent 0.3 :peroxide-value-meq-kg 5.0
                :batch-temp-c 20 :holding-time-hours 24 :sanitation-score 90
                :product-id :soybean-oil :jurisdiction "US"
@@ -24,8 +23,7 @@
     (is (= :escalate (:effect result))
         "High-stakes op should escalate even if all checks pass")))
 
-(deftest test-run-operation-bad-batch-holds
-  "Batch failing governor checks should be held."
+(deftest ^{:doc "Batch failing governor checks should be held."} test-run-operation-bad-batch-holds
   (let [batch {:batch-id "b1" :ffa-percent 1.5 :peroxide-value-meq-kg 5.0
                :batch-temp-c 20 :holding-time-hours 24 :sanitation-score 90
                :product-id :soybean-oil :jurisdiction "US"
@@ -41,8 +39,7 @@
     (is (= :hold (:effect result))
         "Bad batch should be held")))
 
-(deftest test-run-operation-appends-audit-fact
-  "Operation should append audit fact to store."
+(deftest ^{:doc "Operation should append audit fact to store."} test-run-operation-appends-audit-fact
   (let [batch {:batch-id "b1" :ffa-percent 0.3 :peroxide-value-meq-kg 5.0
                :batch-temp-c 20 :holding-time-hours 24 :sanitation-score 90
                :product-id :soybean-oil :jurisdiction "US"
@@ -61,8 +58,7 @@
     (is (= :escalate (:disposition (first (:facts next-st))))
         "Fact disposition should match effect")))
 
-(deftest test-create-batch-request
-  "Helper to create batch logging request."
+(deftest ^{:doc "Helper to create batch logging request."} test-create-batch-request
   (let [req (operation/create-batch-request "b1" :soybean-oil "US" :weight-kg 1000)]
     (is (= :log-production-batch (:op req)))
     (is (= "b1" (:subject req)))
@@ -70,22 +66,19 @@
     (is (= "US" (:jurisdiction req)))
     (is (= 1000 (:weight-kg req)))))
 
-(deftest test-create-maintenance-request
-  "Helper to create maintenance scheduling request."
+(deftest ^{:doc "Helper to create maintenance scheduling request."} test-create-maintenance-request
   (let [req (operation/create-maintenance-request "equip-A" :filter-replacement)]
     (is (= :schedule-maintenance (:op req)))
     (is (= "equip-A" (:subject req)))
     (is (= :filter-replacement (:maintenance-type req)))))
 
-(deftest test-create-shipment-request
-  "Helper to create shipment coordination request."
+(deftest ^{:doc "Helper to create shipment coordination request."} test-create-shipment-request
   (let [req (operation/create-shipment-request "b1" "Customer warehouse")]
     (is (= :coordinate-shipment (:op req)))
     (is (= "b1" (:subject req)))
     (is (= "Customer warehouse" (:destination req)))))
 
-(deftest test-create-concern-request
-  "Helper to create food-safety concern flag request."
+(deftest ^{:doc "Helper to create food-safety concern flag request."} test-create-concern-request
   (let [req (operation/create-concern-request "b1" :ffa-spike "FFA elevated due to hydrolysis")]
     (is (= :flag-food-safety-concern (:op req)))
     (is (= "b1" (:subject req)))
