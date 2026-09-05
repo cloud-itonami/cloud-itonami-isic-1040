@@ -1,156 +1,200 @@
 (ns oilsfats.render-html
-  "Build-time renderer for the OilsFatsOps operator console.
+  "Build-time HTML renderer for docs/samples/operator-console.html.
+  Closes flagship checklist item 2 (com-junkawasaki/root ADR-2607189300).
 
-  This namespace contains NO hand-written business content. It drives the
-  REAL actor stack -- `oilsfats.store` for working memory,
-  `oilsfats.advisor/mock-advisor` as the contained decision node,
-  `oilsfats.governor/check` as the independent compliance layer, and
-  `oilsfats.operation/run-operation` as the state machine -- and then
-  renders whatever those functions actually produced.
+  WHAT IS REAL HERE
+  -----------------
+  Every row on the generated page comes from an actual in-process run of
+  this repo's own actor stack. Nothing is mocked, hand-typed, or narrated:
 
-  This repository's actor is the stateless `run-operation` form (advisor ->
-  governor -> effect); it has no langgraph StateGraph, so there is no
-  `langgraph.graph/run*` to drive here. The real stack is called directly,
-  exactly as `oilsfats.sim` calls it.
+    * The store is built with `oilsfats.store/init-store` +
+      `oilsfats.store/create-batch`, seeded with the two batch records this
+      repository already ships -- `oilsfats.sim/demo-intake-batch` and
+      `oilsfats.sim/demo-rancid-batch` -- under the SAME ids `sim.cljc`
+      uses (`batch-2026-0701`, `batch-2026-0650`). No batch id is invented;
+      both subjects referenced below exist in the seed before they are used.
+    * Every step calls `oilsfats.operation/run-operation` with the real
+      `oilsfats.advisor/MockAdvisor` and the real `oilsfats.governor/check`,
+      threading `:next-store` forward, exactly as `oilsfats.sim/run-demo`
+      does (this repo has no langgraph StateGraph and no `operation/build`
+      -- `run-operation` IS the calling convention; see the ns docstring of
+      `oilsfats.operation`, which states the operation function is the
+      canonical business logic and langgraph integration is future work).
+    * The batch table is read back out of the store AFTER the run, so it
+      shows the ground truth the run actually left behind (`:processed?`,
+      `:shipment-finalized?`), not what the scenario intended.
+    * The action-gate table is derived from the live governor vars
+      (`allowed-ops`, `high-stakes`, `always-escalate-ops`,
+      `batch-scoped-ops`, `spec-basis-required-ops`, `confidence-floor`),
+      the phase table from `oilsfats.phase/phases` ordered by the live
+      `oilsfats.phase/phase-gt` predicate, and the jurisdiction table from
+      `oilsfats.registry/jurisdiction-limits` cross-checked against
+      `oilsfats.facts/jurisdictions` at render time. No prose rows.
 
-  Provenance rules honoured here:
-    - Every subject driven through an operation is either present in the
-      seed store (`seed-store`) or registered by an intake step inside the
-      demo itself (`register!`).
-    - Only fact types that `run-operation` actually appends to
-      `(:facts store)` are branched on: `:governor-hold`,
-      `:governor-escalate`, `:operation-proposed`. Nothing else is invented.
-    - Every rendered batch field is a key that `oilsfats.store` /
-      `oilsfats.sim` actually put on a batch record.
+  HOW IT WAS VERIFIED
+  -------------------
+  Ran `clojure -M:dev:run` first and read its output, then cross-checked
+  every id, op, effect and violation rule this file relies on against
+  `store.cljc` / `governor.cljc` / `advisor.cljc` / `facts.cljc` /
+  `registry.cljc` by hand. The two scenarios `sim.cljc` prints
+  (`batch-2026-0701` -> `:escalate` with 0 hard violations at confidence
+  0.88; `batch-2026-0650` -> `:hold` with exactly the four hard rules
+  `:evidence-incomplete`, `:ffa-exceeds-limit`,
+  `:peroxide-value-exceeds-limit`, `:sanitation-score-insufficient`)
+  reproduce here identically, which is what makes the rest of the scenario
+  trustworthy.
 
-  Deterministic: no timestamps, no randomness, every set is sorted before
-  it reaches the HTML, so repeated runs are byte-identical.
-
-  Usage: clojure -M:dev:render-html [out-file]"
+  DETERMINISM
+  -----------
+  No timestamps, no randomness, no wall-clock content, no host-dependent
+  identity. Every set is sorted before rendering. Two consecutive runs are
+  byte-identical."
   (:require [clojure.string :as str]
+            [jp-go-dds.skin]
             [oilsfats.advisor :as advisor]
             [oilsfats.facts :as facts]
             [oilsfats.governor :as governor]
             [oilsfats.operation :as operation]
             [oilsfats.phase :as phase]
+            [oilsfats.registry :as registry]
             [oilsfats.sim :as sim]
             [oilsfats.store :as store]))
 
-;; ============================ demo wiring ============================
+;; `sim.cljc` passes exactly this context map to `run-operation`.
+(def ^:private context {:actor-id "oils-fats-governor-v1"})
 
-(def ^:private operator
-  "Context threaded into every `run-operation` call. `run-operation` reads
-  `:actor-id` for the audit fact; `governor/check` ignores context entirely
-  (its second parameter is `_context`)."
-  {:actor-id "oils-fats-governor-v1"})
+;; The rollout phase this console reports. `oilsfats.phase` exposes no
+;; `default-phase` var, so the phase is named here rather than guessed from
+;; the phase map; `:production` is the phase `blueprint.edn`/README describe
+;; the actor as being built for. FIXED DOCUMENTATION, not a live value.
+(def ^:private reported-phase :production)
 
-(def ^:private rollout-phase
-  "Rollout phase claimed by this console. NOTE: `governor/check` does not
-  consult `oilsfats.phase` -- the enforced gate is the closed allowlist."
-  :production)
-
+;; Both ids exist in the seed below before any request references them.
 (def ^:private clean-batch-id "batch-2026-0701")
 (def ^:private rancid-batch-id "batch-2026-0650")
-(def ^:private flagged-batch-id "batch-2026-0712")
-(def ^:private equipment-id "press-line-02")
-
-(defn- flagged-batch
-  "A batch identical to `sim/demo-intake-batch` in every quality dimension,
-  but carrying an unresolved contamination flag. Both flag keys are part of
-  the batch record shape documented in `oilsfats.store`."
-  [batch-id]
-  (assoc (sim/demo-intake-batch batch-id)
-         :contamination-flag-raised? true
-         :contamination-flag-resolved? false))
 
 (defn- seed-store
-  "Seed working memory. Batch records come from `oilsfats.sim`'s own demo
-  fixtures; the maintenance record uses `store/add-maintenance-record`."
+  "The store seed: this repo's own two batch records, under this repo's own
+  ids. `store/init-store` starts empty -- `store.cljc` ships no seed fn, so
+  the batch constructors in `sim.cljc` are the repository's real sample
+  data and are reused verbatim rather than retyped."
   []
-  (-> (store/init-store)
-      (store/create-batch clean-batch-id (sim/demo-intake-batch clean-batch-id))
-      (store/create-batch rancid-batch-id (sim/demo-rancid-batch rancid-batch-id))
-      (store/add-maintenance-record
-       equipment-id
-       {:equipment-id equipment-id :maintenance-type :routine-inspection})))
+  (let [clean  (sim/demo-intake-batch clean-batch-id)
+        rancid (sim/demo-rancid-batch rancid-batch-id)]
+    (-> (store/init-store)
+        (store/create-batch (:batch-id clean) clean)
+        (store/create-batch (:batch-id rancid) rancid))))
+
+;; ----------------------------- driver -----------------------------
 
 (defn- step
-  "Run ONE real operation: advisor proposal -> governor verdict -> effect.
-  Threads `:next-store` forward so the append-only ledger accumulates."
-  [state label request]
-  (let [{:keys [next-store fact verdict effect]}
-        (operation/run-operation (:store state) request operator
-                                 (:advisor state) governor/check)]
+  "Run ONE real operation against the live store and thread `:next-store`
+  forward, keeping the request and result for rendering. `advisor-impl`
+  defaults to the repo's real `MockAdvisor`."
+  ([state label request] (step state label request nil))
+  ([state label request advisor-impl]
+   (let [adv    (or advisor-impl (advisor/mock-advisor))
+         result (operation/run-operation (:store state) request context adv governor/check)]
+     (-> state
+         (assoc :store (:next-store result))
+         (update :steps conj (assoc result :label label :request request))))))
+
+(defn- sign-off-batch
+  "Human sign-off of an escalated `:log-production-batch`. This repo's
+  operation state machine ends at :propose/:escalate/:hold -- there is no
+  commit node and no approval fact shape in the domain model -- so the
+  sign-off is recorded ONLY as the one-way store flag the model actually
+  has (`store/mark-batch-processed`, whose docstring defines it as \"has
+  :log-production-batch already committed for this batch?\"). No invented
+  fact type is appended to the ledger."
+  [state batch-id]
+  (update state :store store/mark-batch-processed batch-id))
+
+(defn- sign-off-shipment
+  "Human sign-off of an escalated `:coordinate-shipment`: sets the one-way
+  `:shipment-finalized?` flag and files the shipment record. The record
+  filed is the advisor's own proposal `:value` for this request (recomputed
+  purely -- `run-operation` only carries the proposal on :propose facts),
+  so no shipment fields are invented. `store/add-shipment-record` is keyed
+  by an opaque shipment-id which this repo's model never seeds, so the
+  signed-off subject batch-id is used as the key."
+  [state batch-id request]
+  (let [proposal (advisor/propose (advisor/mock-advisor) (:store state) request)]
     (-> state
-        (assoc :store next-store)
-        (update :steps conj {:label label
-                             :request request
-                             :fact fact
-                             :verdict verdict
-                             :effect effect}))))
-
-(defn- register!
-  "Intake/registration of a new batch from inside the demo. This is the
-  provenance source for any subject that is not in the seed store."
-  [state batch-id batch]
-  (-> state
-      (update :store store/create-batch batch-id batch)
-      (update :operator-actions conj
-              {:action :create-batch
-               :subject batch-id
-               :note "intake registration -- prerequisite for governor rule :batch-not-registered"})))
-
-(defn- sign-off!
-  "Apply a one-way commitment flag after a human signs off on an escalated
-  proposal. The actor NEVER does this: `run-operation` only ever appends an
-  audit fact. These `store/mark-*` calls are what later make the governor's
-  idempotency rules (:already-processed, :already-shipment-finalized) fire."
-  [state action subject note]
-  (-> state
-      (update :store (case action
-                       :mark-batch-processed store/mark-batch-processed
-                       :mark-batch-shipment-finalized store/mark-batch-shipment-finalized)
-              subject)
-      (update :operator-actions conj {:action action :subject subject :note note})))
+        (update :store store/mark-batch-shipment-finalized batch-id)
+        (update :store store/add-shipment-record batch-id (:value proposal)))))
 
 (defn run-demo!
-  "Drive the real actor stack. Returns {:store .. :steps [..]
-  :operator-actions [..]}."
-  []
-  (let [s0 {:store (seed-store)
-            :advisor (advisor/mock-advisor)
-            :steps []
-            :operator-actions []}
-        rancid (store/production-batch (:store s0) rancid-batch-id)
-        s1 (step s0 "Clean US soybean-oil batch proposed for production logging"
-                 (operation/create-batch-request clean-batch-id :soybean-oil "US"))
-        s2 (sign-off! s1 :mark-batch-processed clean-batch-id
-                      "human sign-off on the escalated proposal; sets :processed?")
-        s3 (step s2 "Same batch re-proposed after sign-off (idempotency probe)"
-                 (operation/create-batch-request clean-batch-id :soybean-oil "US"))
-        s4 (step s3 "Rancid batch proposed for production logging"
-                 (operation/create-batch-request rancid-batch-id :soybean-oil "US"))
-        s5 (step s4 "Food-safety concern raised against the rancid batch"
-                 (operation/create-concern-request
-                  rancid-batch-id :rancidity
-                  (str "FFA " (:ffa-percent rancid) "% / PV "
-                       (:peroxide-value-meq-kg rancid) " mEq/kg observed on assay")))
-        s6 (register! s5 flagged-batch-id (flagged-batch flagged-batch-id))
-        s7 (step s6 "Shipment proposed for a batch with an unresolved contamination flag"
-                 (operation/create-shipment-request flagged-batch-id "customer warehouse"))
-        s8 (step s7 "Shipment proposed for the signed-off batch"
-                 (operation/create-shipment-request clean-batch-id "customer warehouse"))
-        s9 (sign-off! s8 :mark-batch-shipment-finalized clean-batch-id
-                      "human sign-off on the escalated shipment; sets :shipment-finalized?")
-        s10 (step s9 "Same shipment re-proposed after sign-off (idempotency probe)"
-                  (operation/create-shipment-request clean-batch-id "customer warehouse"))
-        s11 (step s10 "Preventative maintenance proposed on the press line"
-                  (operation/create-maintenance-request equipment-id :routine-inspection))
-        s12 (step s11 "Direct refining-line actuation probed against the closed allowlist"
-                  {:op :actuate-refining-line :subject clean-batch-id})]
-    (dissoc s12 :advisor)))
+  "Drive the real stack through a scenario built entirely from the seeded
+  batches and the governor's real rules.
 
-;; ============================= rendering =============================
+  CLEAN LIFECYCLE (batch-2026-0701, the good soybean-oil lot):
+    1. :log-production-batch  -> governor clean (0 hard violations) but
+       `:log-production-batch` is in `governor/high-stakes`, so it ESCALATES
+       -> operator sign-off -> `:processed?` true.
+    3. :coordinate-shipment   -> governor clean, high-stakes, ESCALATES ->
+       operator sign-off -> `:shipment-finalized?` true + shipment filed.
+
+  HARD HOLDS (never overridable -- `check` returns :hard? true, and
+  `run-operation` renders :hold before any escalation path is reachable):
+    2. A rogue advisor that claims `:effect :commit` instead of `:propose`
+       -> `:effect-not-propose` (HARD invariant 2). The advisor is the real
+       MockAdvisor with only the effect key overridden.
+    4. Re-proposing :log-production-batch for an already-processed batch
+       -> `:already-processed` (HARD invariant 14, one-way flag).
+    5. Re-proposing :coordinate-shipment for an already-shipped batch
+       -> `:already-shipment-finalized` (HARD invariant 15).
+    7. :log-production-batch on the rancid lot -> FOUR hard rules at once
+       (`:evidence-incomplete`, `:ffa-exceeds-limit`,
+       `:peroxide-value-exceeds-limit`, `:sanitation-score-insufficient`).
+    8. `:operate-refining-line` -> `:disallowed-operation`. This is THE
+       PERMANENT hold: `governor/allowed-ops` is a closed allowlist and its
+       docstring states extraction/refining-line actuation \"can never be
+       phased into autonomy\". No phase, no confidence, no human approval
+       reaches past it.
+
+  ALWAYS-ESCALATE:
+    6. :flag-food-safety-concern on the rancid lot -> `:monitoring` stake
+       (NOT in high-stakes) yet still escalates, because the op is in
+       `governor/always-escalate-ops`: food-safety decisions are never
+       settled by advisor confidence.
+
+  Not exercised: `:schedule-maintenance`. It is in the allowlist and is
+  high-stakes, but its `:subject` is an equipment id and this repo's store
+  seeds no equipment inventory -- referencing one would mean inventing an
+  id, so the action-gate table reports it as unexercised instead.
+
+  Returns the final state {:store .. :steps [..]}."
+  []
+  (let [ship-req  (operation/create-shipment-request
+                   clean-batch-id
+                   ;; nil -> the advisor's own domain default destination,
+                   ;; so no operator string is invented here.
+                   nil)
+        rogue-adv (fn [st request]
+                    ;; Real MockAdvisor proposal, with ONLY :effect flipped.
+                    (assoc (advisor/propose (advisor/mock-advisor) st request)
+                           :effect :commit))]
+    (-> {:store (seed-store) :steps []}
+        (step "1. log clean batch"
+              (operation/create-batch-request clean-batch-id :soybean-oil "US"))
+        (sign-off-batch clean-batch-id)
+        (step "2. rogue advisor claims :commit" ship-req rogue-adv)
+        (step "3. coordinate shipment" ship-req)
+        (sign-off-shipment clean-batch-id ship-req)
+        (step "4. re-log the same batch"
+              (operation/create-batch-request clean-batch-id :soybean-oil "US"))
+        (step "5. re-ship the same batch" ship-req)
+        (step "6. flag food-safety concern"
+              (operation/create-concern-request rancid-batch-id nil nil))
+        (step "7. log rancid batch"
+              (operation/create-batch-request rancid-batch-id :soybean-oil "US"))
+        ;; No constructor exists for this op -- by design. It is outside the
+        ;; closed allowlist, so `operation` deliberately offers no helper.
+        (step "8. actuate refining line"
+              {:op :operate-refining-line :subject clean-batch-id}))))
+
+;; ----------------------------- render helpers -----------------------------
 
 (defn- esc [v]
   (-> (str v)
@@ -159,313 +203,276 @@
       (str/replace ">" "&gt;")
       (str/replace "\"" "&quot;")))
 
-(defn- kw->s [k] (if (keyword? k) (name k) (str k)))
+(defn- kw [v] (if (keyword? v) (name v) (str v)))
 
-(defn- code [v] (str "<code>" (esc v) "</code>"))
+(defn- sorted-names
+  "Sets are rendered sorted -- required for byte-identical reruns."
+  [s]
+  (str/join ", " (sort (map kw s))))
 
-(defn- rules->s [rules] (str/join ", " (map kw->s rules)))
+(defn- yn [b] (if b "yes" "no"))
 
-(defn- sorted-names [coll] (sort (map kw->s coll)))
+(defn- effect-class [effect]
+  (case effect
+    :propose  "ok"
+    :escalate "warn"
+    :hold     "err"
+    "muted"))
 
-(defn- table [headers rows]
-  (str "<div class=\"dads-table\"><table><thead><tr>"
-       (str/join (map #(str "<th>" (esc %) "</th>") headers))
-       "</tr></thead><tbody>\n"
-       (str/join "\n" rows)
-       "\n</tbody></table></div>"))
+;; ----------------------------- sections -----------------------------
 
-(defn- tr [cells]
-  (str "<tr>" (str/join (map #(str "<td>" % "</td>") cells)) "</tr>"))
+(defn- batch-rows
+  "Ground truth read back out of the store AFTER the run. Only fields the
+  batch record actually carries are rendered."
+  [st]
+  (for [id (sort (keys (:batches st)))
+        :let [b (store/production-batch st id)
+              p (facts/product-type-by-id (:product-id b))]]
+    (str "<tr><td><code>" (esc id) "</code></td>"
+         "<td>" (esc (:product-name b)) "</td>"
+         "<td>" (esc (:jurisdiction b)) "</td>"
+         "<td class=\"num\">" (esc (:ffa-percent b)) "</td>"
+         "<td class=\"num\">" (esc (:peroxide-value-meq-kg b)) "</td>"
+         "<td class=\"num\">" (esc (:batch-temp-c b)) " ["
+         (esc (:storage-temp-min-c p)) "&ndash;" (esc (:storage-temp-max-c p)) "]</td>"
+         "<td class=\"num\">" (esc (:holding-time-hours b)) "</td>"
+         "<td class=\"num\">" (esc (:sanitation-score b)) "</td>"
+         "<td>" (esc (kw (:metal-detector b))) " / " (esc (kw (:microbial-test b))) "</td>"
+         "<td>" (esc (sorted-names (:evidence-checklist b))) "</td>"
+         "<td>" (yn (true? (:contamination-flag-raised? b))) "</td>"
+         "<td class=\"" (if (:processed? b) "ok" "muted") "\">"
+         (yn (true? (:processed? b))) "</td>"
+         "<td class=\"" (if (:shipment-finalized? b) "ok" "muted") "\">"
+         (yn (true? (:shipment-finalized? b))) "</td></tr>")))
 
-;; --- ledger-derived status ------------------------------------------
-;; `run-operation` appends exactly three fact types. Only those are
-;; branched on here; there is deliberately no ":committed" / ":approved"
-;; branch, because this store never appends such a fact.
+(defn- timeline-rows [steps]
+  (for [{:keys [label request effect verdict]} steps]
+    (str "<tr><td>" (esc label) "</td>"
+         "<td><code>" (esc (kw (:op request))) "</code></td>"
+         "<td><code>" (esc (:subject request)) "</code></td>"
+         "<td class=\"" (effect-class effect) "\">" (esc (kw effect)) "</td>"
+         "<td class=\"num\">" (esc (:confidence verdict)) "</td>"
+         "<td>" (yn (:high-stakes? verdict)) "</td>"
+         "<td>" (if (seq (:violations verdict))
+                  (str "<span class=\"err\">"
+                       (esc (str/join ", " (map #(kw (:rule %)) (:violations verdict))))
+                       "</span>")
+                  "<span class=\"muted\">&mdash;</span>")
+         "</td></tr>")))
 
-(defn- last-fact-for [ledger subject]
-  (last (filter #(= subject (:subject %)) ledger)))
+(defn- violation-rows
+  "Every hard violation the run actually produced, verbatim from the
+  governor's own `:detail` strings."
+  [steps]
+  (for [{:keys [label request verdict]} steps
+        v (:violations verdict)]
+    (str "<tr><td>" (esc label) "</td>"
+         "<td><code>" (esc (:subject request)) "</code></td>"
+         "<td class=\"err\"><code>" (esc (kw (:rule v))) "</code></td>"
+         "<td>" (esc (:detail v)) "</td></tr>")))
 
-(defn- fact-badge [fact]
-  (case (:t fact)
-    :governor-hold
-    (str "<span class=\"hold\">HARD hold — " (esc (rules->s (:basis fact))) "</span>")
-    :governor-escalate
-    (str "<span class=\"escalate\">escalated — " (esc (kw->s (:reason fact))) "</span>")
-    :operation-proposed
-    "<span class=\"ok\">proposed</span>"
-    (str "<span class=\"muted\">" (esc (kw->s (:t fact))) "</span>")))
+(defn- action-gate-rows
+  "Derived from the live governor vars, not from prose. The `exercised`
+  column is derived from the run's own steps."
+  [steps]
+  (let [observed (reduce (fn [m {:keys [request effect]}]
+                           (update m (:op request) (fnil conj #{}) effect))
+                         {} steps)]
+    (for [op (sort (map kw governor/allowed-ops))
+          :let [k (keyword op)
+                seen (get observed k)]]
+      (str "<tr><td><code>" (esc op) "</code></td>"
+           "<td>" (yn (contains? governor/high-stakes k)) "</td>"
+           "<td>" (yn (contains? governor/always-escalate-ops k)) "</td>"
+           "<td>" (yn (contains? governor/batch-scoped-ops k)) "</td>"
+           "<td>" (yn (contains? governor/spec-basis-required-ops k)) "</td>"
+           "<td class=\"" (if seen "ok" "muted") "\">"
+           (if seen (esc (str/join ", " (sort (map kw seen)))) "not exercised")
+           "</td></tr>"))))
 
-(defn- status-cell [ledger subject]
-  (if-let [f (last-fact-for ledger subject)]
-    (fact-badge f)
-    "<span class=\"muted\">no ledger activity</span>"))
+(defn- phase-order
+  "Rollout order derived from the live `phase/phase-gt` predicate rather
+  than a hand-written list."
+  []
+  (sort (fn [a b] (cond (= a b) 0 (phase/phase-gt a b) 1 :else -1))
+        (keys phase/phases)))
 
-;; --- sections --------------------------------------------------------
+(defn- phase-rows []
+  (for [id (phase-order)
+        :let [p (phase/phase-by-id id)]]
+    (str "<tr><td><code>" (esc (kw id)) "</code></td>"
+         "<td>" (esc (:name p)) "</td>"
+         "<td>" (if (seq (:allowed-ops p))
+                  (esc (sorted-names (:allowed-ops p)))
+                  "<span class=\"muted\">(none)</span>") "</td>"
+         "<td>" (yn (phase/escalate-all-proposals? id)) "</td>"
+         "<td>" (if (= id reported-phase) "<span class=\"badge\">reported</span>" "") "</td></tr>")))
 
-(defn- holds [ledger] (filterv #(= :governor-hold (:t %)) ledger))
-(defn- escalations [ledger] (filterv #(= :governor-escalate (:t %)) ledger))
-(defn- proposals [ledger] (filterv #(= :operation-proposed (:t %)) ledger))
+(defn- limits-agree?
+  "The Governor consults `registry/jurisdiction-limits`; `facts/jurisdictions`
+  is the deliberately independent twin (see registry.cljc's ns docstring).
+  Agreement is computed here at render time, not asserted."
+  [jur]
+  (let [j (facts/jurisdiction-by-id (keyword jur))
+        r (get registry/jurisdiction-limits jur)
+        ks [:ffa-limit-percent :peroxide-limit-meq-kg
+            :sanitation-min-score :max-holding-hours]]
+    (boolean (and j r (= (select-keys j ks) (select-keys r ks))))))
 
-(defn- holds-section [ledger]
-  (let [rows (for [f (holds ledger)
-                   v (:violations f)]
-               (tr [(code (kw->s (:op f)))
-                    (esc (:subject f))
-                    (str "<span class=\"hold\">" (esc (kw->s (:rule v))) "</span>")
-                    (esc (:detail v))]))]
-    (str "<section class=\"dds-ext-card\"><h2>Governor HARD holds</h2>"
-         "<p class=\"lead\">Every row below was produced by <code>oilsfats.governor/check</code> "
-         "against store state — the rule name and the detail string are the governor's own. "
-         "A HARD hold cannot be bought past by advisor confidence.</p>"
-         (table ["Op" "Subject" "Rule" "Governor detail"] rows)
-         "</section>")))
+(defn- jurisdiction-rows []
+  (for [jur (sort (keys registry/jurisdiction-limits))
+        :let [r (get registry/jurisdiction-limits jur)
+              j (facts/jurisdiction-by-id (keyword jur))]]
+    (str "<tr><td><code>" (esc jur) "</code></td>"
+         "<td>" (esc (:name j)) "</td>"
+         "<td class=\"num\">" (esc (:ffa-limit-percent r)) "</td>"
+         "<td class=\"num\">" (esc (:peroxide-limit-meq-kg r)) "</td>"
+         "<td class=\"num\">" (esc (:sanitation-min-score r)) "</td>"
+         "<td class=\"num\">" (esc (:max-holding-hours r)) "</td>"
+         "<td>" (esc (sorted-names (:required-evidence j))) "</td>"
+         "<td class=\"" (if (limits-agree? jur) "ok" "err") "\">"
+         (yn (limits-agree? jur)) "</td></tr>")))
 
-(defn- run-section [steps]
-  (let [rows (map-indexed
-              (fn [i {:keys [label request fact verdict]}]
-                (tr [(str (inc i))
-                     (esc label)
-                     (code (kw->s (:op request)))
-                     (esc (:subject request))
-                     (fact-badge fact)
-                     (esc (format "%.2f" (double (:confidence verdict))))]))
-              steps)]
-    (str "<section class=\"dds-ext-card\"><h2>Run trace</h2>"
-         "<p class=\"lead\">Each step is one <code>oilsfats.operation/run-operation</code> call: "
-         "advisor proposal → governor verdict → effect. The store is threaded forward, so "
-         "the ledger below is the accumulated <code>:facts</code> vector.</p>"
-         (table ["#" "Step" "Op" "Subject" "Outcome" "Advisor confidence"] rows)
-         "</section>")))
+(defn- ledger-rows
+  "The append-only audit ledger, verbatim from `(:facts store)`."
+  [st]
+  (for [{:keys [t op actor subject disposition reason basis confidence]} (:facts st)]
+    (str "<tr><td><code>" (esc (kw t)) "</code></td>"
+         "<td><code>" (esc (kw op)) "</code></td>"
+         "<td>" (esc actor) "</td>"
+         "<td><code>" (esc subject) "</code></td>"
+         "<td class=\"" (effect-class disposition) "\">" (esc (kw disposition)) "</td>"
+         "<td>" (esc (kw reason)) "</td>"
+         "<td>" (if (seq basis)
+                  (esc (str/join ", " (map kw basis)))
+                  "<span class=\"muted\">&mdash;</span>") "</td>"
+         "<td class=\"num\">" (if (some? confidence)
+                                (esc confidence)
+                                "<span class=\"muted\">&mdash;</span>") "</td></tr>")))
 
-(defn- batch-row [st ledger b]
-  (let [product (facts/product-type-by-id (:product-id b))]
-    (tr [(code (:batch-id b))
-         (esc (or (:product-name b) (:name product) "-"))
-         (esc (:jurisdiction b))
-         (esc (:ffa-percent b))
-         (esc (:peroxide-value-meq-kg b))
-         (esc (:batch-temp-c b))
-         (esc (:holding-time-hours b))
-         (esc (:sanitation-score b))
-         (esc (kw->s (:metal-detector b)))
-         (esc (kw->s (:microbial-test b)))
-         (esc (str/join ", " (sorted-names (:evidence-checklist b))))
-         (if (true? (:contamination-flag-raised? b))
-           (if (true? (:contamination-flag-resolved? b))
-             "<span class=\"ok\">resolved</span>"
-             "<span class=\"hold\">unresolved</span>")
-           "<span class=\"muted\">none</span>")
-         (str (if (store/batch-already-processed? st (:batch-id b))
-                "<span class=\"ok\">processed</span>" "<span class=\"muted\">—</span>")
-              " / "
-              (if (store/batch-shipment-finalized? st (:batch-id b))
-                "<span class=\"ok\">shipped</span>" "<span class=\"muted\">—</span>"))
-         (status-cell ledger (:batch-id b))])))
+(defn- shipment-rows [st]
+  (for [id (sort (keys (:shipments st)))
+        :let [r (store/shipment-record st id)]]
+    (str "<tr><td><code>" (esc id) "</code></td>"
+         "<td><code>" (esc (:batch-id r)) "</code></td>"
+         "<td>" (esc (:destination r)) "</td></tr>")))
 
-(defn- batches-section [st ledger]
-  (let [bs (sort-by :batch-id (vals (:batches st)))]
-    (str "<section class=\"dds-ext-card\"><h2>Batch register</h2>"
-         "<p class=\"lead\">Read straight out of <code>(:batches store)</code>. "
-         "Every column is a key the batch record actually carries.</p>"
-         (table ["Batch" "Product" "Jurisdiction" "FFA %" "PV mEq/kg" "Temp °C"
-                 "Holding h" "Sanitation" "Metal" "Microbial" "Evidence checklist"
-                 "Contamination" "Commit flags" "Last ledger fact"]
-                (map #(batch-row st ledger %) bs))
-         "</section>")))
+;; ----------------------------- page -----------------------------
 
-(defn- gate-row [advisor st op]
-  (let [proposal (advisor st {:op op :subject clean-batch-id})
-        stake (:stake proposal)
-        high? (contains? governor/high-stakes stake)
-        always? (contains? governor/always-escalate-ops op)]
-    (tr [(code (kw->s op))
-         (code (kw->s stake))
-         (if (contains? governor/batch-scoped-ops op) "required" "<span class=\"muted\">—</span>")
-         (if (contains? governor/spec-basis-required-ops op) "required" "<span class=\"muted\">—</span>")
-         (cond
-           always? "<span class=\"escalate\">ALWAYS human sign-off (always-escalate-ops)</span>"
-           high? "<span class=\"escalate\">ALWAYS human sign-off (high-stakes)</span>"
-           :else "<span class=\"ok\">may propose autonomously when clean</span>")])))
+(defn render [{:keys [store steps]}]
+  (let [st store
+        holds (filter #(= :hold (:effect %)) steps)
+        escs  (filter #(= :escalate (:effect %)) steps)]
+    (str
+     "<!doctype html>\n<html lang=\"ja\">\n<head>\n<meta charset=\"utf-8\">\n"
+     "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1, viewport-fit=cover\">\n"
+     "<title>oilsfats.render-html -- Oils/Fats Manufacturing Governor operator console</title>\n"
+     "<style>"
+     (jp-go-dds.skin/dds+skin)
+     "</style>\n</head>\n<body>\n"
 
-(defn- gate-section [advisor st]
-  (str "<section class=\"dds-ext-card\"><h2>Action gate</h2>"
-       "<p class=\"lead\">Derived at build time from <code>governor/allowed-ops</code>, "
-       "<code>governor/high-stakes</code>, <code>governor/always-escalate-ops</code>, "
-       "<code>governor/batch-scoped-ops</code> and <code>governor/spec-basis-required-ops</code>, "
-       "with the stake read off the advisor's real proposal. Anything outside this closed "
-       "allowlist — direct extraction/refining-line control, self-certification — is a "
-       "permanent <code>:disallowed-operation</code> hold, not a phase gate.</p>"
-       (table ["Op" "Advisor stake" "Subject must be registered" "Spec basis" "Gate"]
-              (map #(gate-row advisor st %) (sort (vec governor/allowed-ops))))
-       "</section>"))
+     "<header class=\"bar\"><h1>OilsFatsOps &mdash; Operator Console</h1>"
+     "<span class=\"badge\">ISIC 1040 &middot; oils/fats manufacturing coordination &middot; phase "
+     (esc (kw reported-phase)) "</span></header>\n<main>\n"
 
-(defn- jurisdiction-section []
-  (str "<section class=\"dds-ext-card\"><h2>Jurisdiction limits</h2>"
-       "<p class=\"lead\">From <code>oilsfats.facts/jurisdictions</code>. "
-       "<code>oilsfats.registry</code> keeps an independently maintained, string-keyed "
-       "mirror of these numbers; the governor calls the registry, never the advisor.</p>"
-       (table ["Jurisdiction" "Name" "FFA limit %" "PV limit mEq/kg"
-               "Min sanitation" "Max holding h" "Required evidence"]
-              (for [[id j] (sort-by key facts/jurisdictions)]
-                (tr [(code (kw->s id))
-                     (esc (:name j))
-                     (esc (:ffa-limit-percent j))
-                     (esc (:peroxide-limit-meq-kg j))
-                     (esc (:sanitation-min-score j))
-                     (esc (:max-holding-hours j))
-                     (esc (str/join ", " (sorted-names (:required-evidence j))))])))
-       "</section>"))
+     "<div class=\"banner\"><p>Generated at build time by <code>oilsfats.render-html</code> from a real "
+     "in-process run of <code>oilsfats.operation/run-operation</code> against the real "
+     "<code>oilsfats.advisor/MockAdvisor</code> and the real <code>oilsfats.governor/check</code>. "
+     "Store seed: <code>" (esc clean-batch-id) "</code> and <code>" (esc rancid-batch-id)
+     "</code>, this repository's own batch records (<code>oilsfats.sim/demo-intake-batch</code>, "
+     "<code>oilsfats.sim/demo-rancid-batch</code>) &mdash; no invented ids. "
+     (esc (count steps)) " operations produced " (esc (count (:facts st))) " audit facts: "
+     (esc (count escs)) " escalations and " (esc (count holds)) " HARD holds. "
+     "No timestamps, no randomness &mdash; reruns are byte-identical.</p></div>\n"
 
-(defn- product-section []
-  (str "<section class=\"dds-ext-card\"><h2>Product storage ranges</h2>"
-       "<p class=\"lead\">From <code>oilsfats.facts/product-types</code> — physical facts "
-       "about the product, not jurisdictional law.</p>"
-       (table ["Product" "Name" "Min °C" "Max °C"]
-              (for [[id p] (sort-by key facts/product-types)]
-                (tr [(code (kw->s id))
-                     (esc (:name p))
-                     (esc (:storage-temp-min-c p))
-                     (esc (:storage-temp-max-c p))])))
-       "</section>"))
+     "<section class=\"card\"><h2>Batch registry (store ground truth, read back after the run)</h2>"
+     "<p class=\"muted\">Read out of the store with <code>store/production-batch</code> AFTER the "
+     "scenario finished, so <code>processed?</code> / <code>shipment-finalized?</code> show what the "
+     "run actually left behind. Temperature is shown against the product's storage range from "
+     "<code>facts/product-types</code>. Only fields the batch record carries are rendered.</p>"
+     "<table><thead><tr><th>Batch</th><th>Product</th><th>Juris</th><th>FFA %</th>"
+     "<th>PV mEq/kg</th><th>Temp &deg;C [range]</th><th>Hold h</th><th>Sanit.</th>"
+     "<th>Metal / microbial</th><th>Evidence checklist</th><th>Contam. flag</th>"
+     "<th>Processed?</th><th>Shipped?</th></tr></thead>"
+     "<tbody>\n" (str/join "\n" (batch-rows st)) "\n</tbody></table></section>\n"
 
-(defn- ledger-section [ledger]
-  (str "<section class=\"dds-ext-card\"><h2>Append-only audit ledger</h2>"
-       "<p class=\"lead\">The whole <code>(:facts store)</code> vector, in append order. "
-       "<code>run-operation</code> appends exactly three fact types — "
-       "<code>:operation-proposed</code>, <code>:governor-escalate</code>, "
-       "<code>:governor-hold</code>. It never appends a commit or approval fact, which is "
-       "why the commit flags in the batch register are set out of band by the operator.</p>"
-       (table ["#" "Fact" "Op" "Subject" "Disposition" "Basis / reason"]
-              (map-indexed
-               (fn [i f]
-                 (tr [(str (inc i))
-                      (code (kw->s (:t f)))
-                      (code (kw->s (:op f)))
-                      (esc (:subject f))
-                      (esc (kw->s (:disposition f)))
-                      (cond
-                        (seq (:basis f)) (str "<span class=\"hold\">" (esc (rules->s (:basis f))) "</span>")
-                        (:reason f) (esc (kw->s (:reason f)))
-                        :else "<span class=\"muted\">—</span>")]))
-               ledger))
-       "</section>"))
+     "<section class=\"card\"><h2>Run timeline (every call, in order)</h2>"
+     "<p class=\"muted\">Effect and confidence are the values <code>run-operation</code> returned. "
+     "Steps 1 and 3 escalated clean and were signed off by an operator &mdash; this repo's state "
+     "machine has no commit node, so a sign-off is recorded only as the one-way store flag the "
+     "domain model actually has (<code>mark-batch-processed</code>, "
+     "<code>mark-batch-shipment-finalized</code>); no approval fact shape is invented.</p>"
+     "<table><thead><tr><th>Step</th><th>Op</th><th>Subject</th><th>Effect</th>"
+     "<th>Confidence</th><th>High-stakes</th><th>Hard rules fired</th></tr></thead>"
+     "<tbody>\n" (str/join "\n" (timeline-rows steps)) "\n</tbody></table></section>\n"
 
-(defn- operator-section [actions]
-  (str "<section class=\"dds-ext-card\"><h2>Out-of-band operator actions</h2>"
-       "<p class=\"lead\">The actor proposes; it never commits. These "
-       "<code>oilsfats.store</code> calls are what a human operator performs after signing "
-       "off on an escalated proposal, and they leave no audit fact — that is exactly why "
-       "the idempotency rules can fire on the next proposal.</p>"
-       (table ["Store call" "Subject" "Why"]
-              (for [a actions]
-                (tr [(code (kw->s (:action a)))
-                     (esc (:subject a))
-                     (esc (:note a))])))
-       "</section>"))
+     "<section class=\"card\"><h2>HARD holds (no confidence and no approval reaches past these)</h2>"
+     "<p class=\"muted\">Verbatim <code>:detail</code> strings from <code>governor/check</code>. "
+     "<code>:disallowed-operation</code> is the permanent one: <code>governor/allowed-ops</code> is "
+     "a closed allowlist, and extraction/refining-line actuation is never a member of it, so it "
+     "cannot be phased into autonomy at any rollout stage. The others are the one-way idempotence "
+     "flags, the &quot;proposal must not claim :commit&quot; invariant, and the quality/evidence "
+     "limits the Governor re-verifies independently through <code>oilsfats.registry</code>.</p>"
+     "<table><thead><tr><th>Step</th><th>Subject</th><th>Rule</th><th>Governor detail</th></tr></thead>"
+     "<tbody>\n" (str/join "\n" (violation-rows steps)) "\n</tbody></table></section>\n"
 
-(defn- summary-section [ledger st]
-  (let [ph (phase/phase-by-id rollout-phase)]
-    (str "<section class=\"dds-ext-card\"><h2>Run summary</h2>"
-         (table ["Measure" "Value"]
-                [(tr ["Ledger facts appended" (esc (count ledger))])
-                 (tr ["HARD holds (<code>:governor-hold</code>)"
-                      (str "<span class=\"hold\">" (esc (count (holds ledger))) "</span>")])
-                 (tr ["Escalations (<code>:governor-escalate</code>)"
-                      (str "<span class=\"escalate\">" (esc (count (escalations ledger))) "</span>")])
-                 (tr ["Autonomous proposals (<code>:operation-proposed</code>)"
-                      (esc (count (proposals ledger)))])
-                 (tr ["Batches registered" (esc (count (:batches st)))])
-                 (tr ["Maintenance records" (esc (count (:maintenance st)))])
-                 (tr ["Rollout phase" (str (code (kw->s rollout-phase)) " — " (esc (:name ph)))])
-                 (tr ["Confidence floor" (esc governor/confidence-floor)])])
-         "<p class=\"lead\">Autonomous proposals are zero by construction, not by accident: "
-         "every op in the closed allowlist either carries a <code>high-stakes</code> stake or "
-         "sits in <code>always-escalate-ops</code>, so <code>governor/check</code> can never "
-         "return <code>:ok? true</code> for them. <code>oilsfats.phase</code> is declared for "
-         "the record only — <code>governor/check</code> does not consult it.</p>"
-         "</section>")))
+     "<section class=\"card\"><h2>Action gate</h2>"
+     "<p class=\"muted\">Derived from the live vars <code>governor/allowed-ops</code>, "
+     "<code>governor/high-stakes</code>, <code>governor/always-escalate-ops</code>, "
+     "<code>governor/batch-scoped-ops</code> and <code>governor/spec-basis-required-ops</code> "
+     "&mdash; not from prose. Confidence floor: <code>" (esc governor/confidence-floor)
+     "</code>. Any op absent from this table is a permanent hard block (step 8 demonstrates one).</p>"
+     "<table><thead><tr><th>Op (allowlist)</th><th>High-stakes</th><th>Always escalates</th>"
+     "<th>Batch-scoped</th><th>Spec basis required</th><th>Exercised in this run</th></tr></thead>"
+     "<tbody>\n" (str/join "\n" (action-gate-rows steps)) "\n</tbody></table></section>\n"
 
-(def ^:private css
-  "Token values copied from the jp-go-digital-design-system CSS already
-  vendored into docs/index.html, so this console matches the product face
-  without pulling the 2,400-line vendored sheet into a build-time script."
-  (str ":root{--gray-50:#f2f2f2;--gray-100:#e6e6e6;--gray-200:#cccccc;--gray-600:#666666;"
-       "--gray-800:#333333;--gray-900:#1a1a1a;--white:#ffffff;--blue-50:#e8f1fe;"
-       "--blue-800:#0031d8;--green-800:#197a4b;--red-800:#ec0000;--yellow-900:#927200;"
-       "--font-sans:\"Noto Sans JP\",-apple-system,BlinkMacSystemFont,sans-serif;"
-       "--font-mono:\"Noto Sans Mono\",monospace}"
-       "body{margin:0;background:var(--white);color:var(--gray-800);font-family:var(--font-sans);"
-       "font-size:15px;line-height:1.7}"
-       ".dds-ext-container{max-width:74rem;margin-inline:auto;padding-inline:1rem}"
-       ".pf-header{padding-block:3rem 1.25rem}"
-       ".dads-heading{margin:0 0 1rem;font-size:2rem;line-height:1.4;color:var(--gray-900)}"
-       ".dads-chip-label{display:inline-block;background:var(--blue-50);color:var(--blue-800);"
-       "border-radius:999px;padding:.15rem .8rem;font-size:.8rem;font-weight:700}"
-       ".dds-ext-card{border:1px solid var(--gray-200);border-radius:12px;padding:1.5rem;"
-       "background:var(--white);margin-bottom:1.5rem}"
-       ".dds-ext-card h2{margin:0 0 .5rem;font-size:1.2rem;color:var(--gray-900)}"
-       ".lead{color:var(--gray-600);font-size:.9rem;margin:0 0 1rem}"
-       ".dads-table{max-width:100%;overflow-x:auto}"
-       "table{border-collapse:collapse;width:100%;font-size:.82rem}"
-       "th,td{text-align:left;padding:.45rem .6rem;border-bottom:1px solid var(--gray-100);"
-       "vertical-align:top}"
-       "th{font-weight:700;color:var(--gray-600);white-space:nowrap;"
-       "border-bottom:2px solid var(--gray-200)}"
-       "code{font-family:var(--font-mono);background:var(--gray-50);"
-       "border:1px solid var(--gray-200);border-radius:4px;padding:1px 5px;font-size:.9em}"
-       ".hold{color:var(--red-800);font-weight:700}"
-       ".escalate{color:var(--yellow-900);font-weight:700}"
-       ".ok{color:var(--green-800);font-weight:700}"
-       ".muted{color:var(--gray-600)}"
-       ".pf-footer{border-top:1px solid var(--gray-200);margin-top:1rem;"
-       "padding-block:1.5rem 3rem;color:var(--gray-600);font-size:.85rem}"
-       ".pf-footer p{margin:0 0 .5rem}"))
+     "<section class=\"card\"><h2>Rollout phases</h2>"
+     "<p class=\"muted\">From <code>phase/phases</code>, ordered by the live "
+     "<code>phase/phase-gt</code> predicate. Phase progression is manual (ADR-gated), never "
+     "automatic.</p>"
+     "<table><thead><tr><th>Phase</th><th>Name</th><th>Allowed ops</th>"
+     "<th>All proposals escalate</th><th></th></tr></thead>"
+     "<tbody>\n" (str/join "\n" (phase-rows)) "\n</tbody></table></section>\n"
 
-(defn render
-  "Render the console from a completed demo run."
-  [{:keys [store steps operator-actions]}]
-  (let [ledger (vec (:facts store))
-        advisor (advisor/mock-advisor)]
-    (str "<!DOCTYPE html>\n<html lang=\"en\">\n<head><meta charset=\"utf-8\">"
-         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
-         "<meta name=\"color-scheme\" content=\"light\">"
-         "<title>OilsFatsOps operator console | cloud-itonami-isic-1040</title>"
-         "<style>" css "</style></head>\n<body>\n<div class=\"dds-ext-container\">\n"
-         "<header class=\"pf-header\">"
-         "<h1 class=\"dads-heading\">OilsFatsOps operator console</h1>"
-         "<span class=\"dads-chip-label\">ISIC 1040 · oilsfats · generated from a real actor run</span>"
-         "</header>\n"
-         "<div class=\"dds-ext-card\"><p class=\"lead\" style=\"margin:0\">"
-         "Generated by <code>oilsfats.render-html</code> at build time. Every row on this page "
-         "came out of <code>oilsfats.operation/run-operation</code> driving the real "
-         "<code>oilsfats.advisor</code> behind the real <code>oilsfats.governor</code> over a "
-         "real <code>oilsfats.store</code>. Nothing here is hand-written sample data; re-running "
-         "<code>clojure -M:dev:render-html</code> reproduces this file byte for byte."
-         "</p></div>\n"
-         (summary-section ledger store) "\n"
-         (holds-section ledger) "\n"
-         (run-section steps) "\n"
-         (batches-section store ledger) "\n"
-         (gate-section advisor store) "\n"
-         (operator-section operator-actions) "\n"
-         (ledger-section ledger) "\n"
-         (jurisdiction-section) "\n"
-         (product-section) "\n"
-         "<footer class=\"pf-footer\">"
-         "<p>OilsFatsOps-LLM ⊣ Oils/Fats Manufacturing Governor. Physical extraction and "
-         "refining equipment is never actuated by this actor — the closed allowlist has no "
-         "member that could.</p>"
-         "<p>Open occupation blueprint — no invented usage or revenue metrics.</p>"
-         "</footer>\n</div>\n</body>\n</html>\n")))
+     "<section class=\"card\"><h2>Jurisdiction limits (Governor's independent source)</h2>"
+     "<p class=\"muted\">Limits come from <code>registry/jurisdiction-limits</code>, the table the "
+     "Governor actually consults. The last column is computed at render time by comparing it "
+     "against <code>facts/jurisdictions</code>, the deliberately separate twin table &mdash; two "
+     "independently maintained sources agreeing is the point.</p>"
+     "<table><thead><tr><th>Juris</th><th>Name</th><th>FFA limit %</th><th>PV limit</th>"
+     "<th>Sanit. min</th><th>Max hold h</th><th>Required evidence</th>"
+     "<th>Twin tables agree</th></tr></thead>"
+     "<tbody>\n" (str/join "\n" (jurisdiction-rows)) "\n</tbody></table></section>\n"
+
+     "<section class=\"card\"><h2>Audit ledger (append-only, verbatim)</h2>"
+     "<p class=\"muted\">Every fact <code>run-operation</code> appended to "
+     "<code>(:facts store)</code>, in append order. " (esc (count (:facts st)))
+     " facts from " (esc (count steps)) " operations &mdash; one per operation, none added by "
+     "this renderer.</p>"
+     "<table><thead><tr><th>Type</th><th>Op</th><th>Actor</th><th>Subject</th>"
+     "<th>Disposition</th><th>Reason</th><th>Basis</th><th>Confidence</th></tr></thead>"
+     "<tbody>\n" (str/join "\n" (ledger-rows st)) "\n</tbody></table></section>\n"
+
+     "<section class=\"card\"><h2>Filed shipments</h2>"
+     "<p class=\"muted\">From <code>(:shipments store)</code>. The record is the advisor's own "
+     "proposal <code>:value</code> for the signed-off request, so the destination is the domain "
+     "default in <code>oilsfats.advisor</code> rather than an operator string typed here. This "
+     "repo's model seeds no shipment-id namespace, so the record is keyed by its batch.</p>"
+     "<table><thead><tr><th>Key</th><th>Batch</th><th>Destination</th></tr></thead>"
+     "<tbody>\n" (str/join "\n" (shipment-rows st)) "\n</tbody></table></section>\n"
+
+     "<footer><p>Not exercised: <code>:schedule-maintenance</code>. It is in the allowlist and is "
+     "high-stakes, but its subject is an equipment id and this repo's store seeds no equipment "
+     "inventory &mdash; exercising it would mean inventing an id, so it is reported as unexercised "
+     "instead. Physical extraction/refining equipment control is never dispatched by this actor at "
+     "any phase.</p></footer>\n"
+     "</main>\n</body></html>\n")))
 
 (defn -main [& args]
-  (let [out (or (first args) "docs/samples/operator-console.html")
-        result (run-demo!)
-        ledger (vec (:facts (:store result)))
-        f (java.io.File. out)]
-    (when-let [parent (.getParentFile f)] (.mkdirs parent))
-    (spit f (render result))
+  (let [out   (or (first args) "docs/samples/operator-console.html")
+        state (run-demo!)
+        html  (render state)]
+    (spit out html)
     (println "wrote" out
-             (str "(" (count ledger) " ledger facts, "
-                  (count (holds ledger)) " HARD holds, "
-                  (count (escalations ledger)) " escalations)"))))
+             (str "(" (count (:steps state)) " ops, "
+                  (count (:facts (:store state))) " facts)"))))
