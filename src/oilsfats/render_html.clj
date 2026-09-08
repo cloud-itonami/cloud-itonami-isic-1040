@@ -27,7 +27,7 @@
   it reaches the HTML, so repeated runs are byte-identical.
 
   Usage: clojure -M:dev:render-html [out-file]"
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [oilsfats.advisor :as advisor]
             [oilsfats.facts :as facts]
             [oilsfats.governor :as governor]
