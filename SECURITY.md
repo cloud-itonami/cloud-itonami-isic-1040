@@ -51,8 +51,8 @@ auditable.
 
 Before deploying to production:
 
-1. Run full test suite (`clojure -M:test`)
-2. Run linter (`clojure -M:lint`)
+1. Run full test suite (`kbb -M:test`)
+2. Run linter (`kbb -M:lint`)
 3. Review Governor hard-blocks for your jurisdiction
 4. Verify all quality limits against regulatory sources
 5. Obtain food-safety domain expert sign-off before go-live

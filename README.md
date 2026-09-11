@@ -84,18 +84,18 @@ All source modules are `.cljc` (portable Clojure) with full test coverage.
 
 ```bash
 # Run full test suite
-clojure -M:test
+kbb -M:test
 
 # Run specific namespace
-clojure -M:test --exclude oilsfats.sim-test
+kbb -M:test --exclude oilsfats.sim-test
 
 # Static analysis (clj-kondo)
-clojure -M:lint
+kbb -M:lint
 ```
 
 Example simulation (mock advisor):
 ```bash
-clojure -M:dev:run
+kbb -M:dev:run
 ```
 
 ## Architecture
