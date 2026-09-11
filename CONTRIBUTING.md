@@ -28,13 +28,13 @@ git clone https://github.com/cloud-itonami/cloud-itonami-isic-1040
 cd cloud-itonami-isic-1040
 
 # Run tests
-clojure -M:test
+kbb -M:test
 
 # Run linter (clj-kondo)
-clojure -M:lint
+kbb -M:lint
 
 # View demo (mock advisor)
-clojure -M:dev:run
+kbb -M:dev:run
 ```
 
 ### Code style
@@ -62,7 +62,7 @@ clojure -M:dev:run
 1. **Open an issue first** for large changes (new operations, new jurisdictions,
    significant refactors)
 2. **Create a branch** off `main`
-3. **Run full test suite** before pushing (`clojure -M:test && clojure -M:lint`)
+3. **Run full test suite** before pushing (`kbb -M:test && kbb -M:lint`)
 4. **Keep commits focused** (one feature per commit)
 5. **Write clear commit messages** referencing the issue
 6. **Submit a PR** with a summary of changes

@@ -26,7 +26,7 @@
   Deterministic: no timestamps, no randomness, every set is sorted before
   it reaches the HTML, so repeated runs are byte-identical.
 
-  Usage: clojure -M:dev:render-html [out-file]"
+  Usage: kbb -M:dev:render-html [out-file]"
   (:require [kotoba.lang.text :as str]
             [oilsfats.advisor :as advisor]
             [oilsfats.facts :as facts]
@@ -440,7 +440,7 @@
          "came out of <code>oilsfats.operation/run-operation</code> driving the real "
          "<code>oilsfats.advisor</code> behind the real <code>oilsfats.governor</code> over a "
          "real <code>oilsfats.store</code>. Nothing here is hand-written sample data; re-running "
-         "<code>clojure -M:dev:render-html</code> reproduces this file byte for byte."
+         "<code>kbb -M:dev:render-html</code> reproduces this file byte for byte."
          "</p></div>\n"
          (summary-section ledger store) "\n"
          (holds-section ledger) "\n"

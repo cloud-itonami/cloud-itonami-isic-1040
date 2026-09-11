@@ -2,7 +2,7 @@
   "Simple simulation driver: intake batch -> advisor proposal -> governor -> result.
   Demonstrates the OilsFatsOps actor end-to-end with a mock advisor.
 
-  Usage: clojure -M:dev:run"
+  Usage: kbb -M:dev:run"
   (:require [oilsfats.advisor :as advisor]
             [oilsfats.governor :as governor]
             [oilsfats.operation :as operation]
