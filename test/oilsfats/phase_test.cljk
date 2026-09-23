@@ -1,6 +1,6 @@
 (ns oilsfats.phase-test
   (:require
-   [clojure.test :refer [deftest is testing]]
+   [kotoba.test :refer [deftest is testing]]
    [oilsfats.phase :as phase]))
 
 (deftest ^{:doc "Retrieve phase definitions."} test-phase-by-id
