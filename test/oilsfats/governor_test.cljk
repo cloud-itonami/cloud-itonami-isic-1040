@@ -1,6 +1,6 @@
 (ns oilsfats.governor-test
   (:require
-   [clojure.test :refer [deftest is testing]]
+   [kotoba.test :refer [deftest is testing]]
    [oilsfats.governor :as governor]
    [oilsfats.store :as store]))
 

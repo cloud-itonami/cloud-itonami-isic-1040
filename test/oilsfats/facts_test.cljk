@@ -1,6 +1,6 @@
 (ns oilsfats.facts-test
   (:require
-   [clojure.test :refer [deftest is testing]]
+   [kotoba.test :refer [deftest is testing]]
    [oilsfats.facts :as facts]))
 
 (deftest ^{:doc "Retrieve product type specifications."} test-product-type-by-id

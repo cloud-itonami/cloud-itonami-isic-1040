@@ -1,6 +1,6 @@
 (ns oilsfats.store-test
   (:require
-   [clojure.test :refer [deftest is testing]]
+   [kotoba.test :refer [deftest is testing]]
    [oilsfats.store :as store]))
 
 (deftest ^{:doc "Initialize empty store."} test-init-store

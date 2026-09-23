@@ -1,6 +1,6 @@
 (ns oilsfats.operation-test
   (:require
-   [clojure.test :refer [deftest is testing]]
+   [kotoba.test :refer [deftest is testing]]
    [oilsfats.advisor :as advisor]
    [oilsfats.governor :as governor]
    [oilsfats.operation :as operation]
