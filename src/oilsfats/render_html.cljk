@@ -27,7 +27,7 @@
   it reaches the HTML, so repeated runs are byte-identical.
 
   Usage: kbb -M:dev:render-html [out-file]"
-  (:require [kotoba.lang.text :as str]
+  (:require [kotoba.io :as kio] [kotoba.lang.text :as str]
             [oilsfats.advisor :as advisor]
             [oilsfats.facts :as facts]
             [oilsfats.governor :as governor]
@@ -462,8 +462,8 @@
   (let [out (or (first args) "docs/samples/operator-console.html")
         result (run-demo!)
         ledger (vec (:facts (:store result)))
-        f (java.io.File. out)]
-    (when-let [parent (.getParentFile f)] (.mkdirs parent))
+        f (kio/file out)]
+    (when-let [parent (kio/parent-file f)] (kio/mkdirs parent))
     (spit f (render result))
     (println "wrote" out
              (str "(" (count ledger) " ledger facts, "
