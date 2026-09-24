@@ -5,7 +5,7 @@
   and per-product storage-temperature ranges. Pure lookup functions only --
   the Governor calls these to independently validate proposals against
   jurisdiction/product requirements. The Advisor never invents these values."
-  (:require [clojure.set :as set]))
+  (:require [kotoba.lang.coll :as set]))
 
 (def jurisdictions
   "Oils/fats manufacturing jurisdictions and their food-safety limits. Keyed
