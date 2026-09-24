@@ -1,0 +1,20 @@
+{:physics/schema "itonami.physical-ai.spec.v1"
+ :repo "cloud-itonami/cloud-itonami-isic-1040"
+ :cases
+ [{:id :crude-oil-transfer
+   :kind :pipe-flow
+   :procedure "gear pump transfers warm crude vegetable oil from the press to the refinery day tank"
+   :params {:diameter-m 0.08 :length-m 150.0 :roughness-m 4.5e-5
+            :density-kg-m3 910.0 :viscosity-pa-s 0.03 :pump-efficiency 0.6 :elevation-m 10.0}
+   :sweep {:param :q-m3s :values [0.002 0.004 0.006 0.008 0.010]}
+   :quantity :pressure-drop-pa
+   :limit {:max 4.0e5 :basis "estimate: ~4 bar discharge of the transfer gear pump"}
+   :boundary {:lo 5.0e-4 :hi 0.05}}
+  {:id :settling-tank-drain
+   :kind :tank-drain
+   :procedure "robot opens the bottom valve of a 4 m settling tank to send settled oil to the filter"
+   :params {:tank-area-m2 12.6 :h0-m 6.0 :h-target-m 0.5 :cd 0.62 :dt-s 1.0}
+   :sweep {:param :orifice-area-m2 :values [0.002 0.004 0.006 0.008 0.012]}
+   :quantity :time-to-target-s
+   :limit {:max 7200.0 :basis "estimate: settling tank must be emptied within one 2 h filter cycle (inviscid Torricelli drain; oil viscosity not modelled)"}
+   :boundary {:lo 0.001 :hi 0.03}}]}
